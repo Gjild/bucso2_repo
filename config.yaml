@@ -1,0 +1,115 @@
+project:
+  name: "KaBUC-SpurPlan"
+  seed: 42
+  reference_10mhz_hz: 10000000
+
+bands:
+  if1_hz: {min: 950.0e+6, max: 2150.0e+6}
+  rf_hz:  {min: 27.5e+9, max: 31.0e+9}
+  required_bandwidths_hz: [400.0e+6]
+
+grids:
+  if1_center_step_hz: 50.0e+6
+  rf_center_step_hz: 100.0e+6
+  bw_grid_hz: [400.0e+6]
+  snap_if1_rf_to_grid: true
+  grid_max_freq_hz: 45.0e+9
+
+masks:
+  inband:
+    default_dbc: -60.0
+    table: []
+  outofband:
+    default_dbc: -50.0
+    table: []
+
+rbw_binning:
+  lut_step_hz: 2.0e+6
+
+hardware_choices:
+  stacks:
+    - name: "Stack_Alpha"
+      mixer1: "MXR1_Gen"
+      mixer2: "MXR2_Gen"
+      lo1: "LMX2595_Sim"
+      lo2: "LMX2595_Sim"
+      rf_bpf_file: "rf_bpf_sim.csv"
+
+orders:
+  m1n1_max_abs: 5
+  m2n2_max_abs: 5
+  cross_stage_sum_max: 8
+
+constraints:
+  guard_margin_db: 3.0
+  enforce_non_inverting_chain: true
+
+target_specs:
+  min_margin_db: 0.0
+
+runtime_settings:
+  optimization_cutoff_db: -20.0   # Early exit if margin is worse than this
+  noise_floor_cutoff_dbc: -100.0  # Don't track spurs below this relative level
+  s2p_normalization_method: "3db_width" # How to define '1.0' BW in S2P files
+
+mixers:
+  - name: "MXR1_Gen"
+    lo_range_hz: [100e6, 15e9]
+    required_lo_drive_dbm: {min: 0, max: 20}
+    isolation: {lo_to_rf_db: -30, if_to_rf_db: -50}
+    spur_list:
+      - [1, 2, -55]
+      - [2, 1, -50]
+      - [2, 2, -65]
+      - [3, 1, -60]
+      - [1, 3, -60]
+  
+  - name: "MXR2_Gen"
+    lo_range_hz: [100e6, 20e9]
+    required_lo_drive_dbm: {min: 0, max: 20}
+    isolation: {lo_to_rf_db: -30, if_to_rf_db: -50}
+    spur_list:
+      - [1, 2, -50]
+      - [2, 1, -45]
+      - [2, 2, -60]
+      - [3, 1, -55]
+
+los:
+  - name: "LMX2595_Sim"
+    freq_range_hz: [100e6, 20e9]
+    step_hz: 1000
+    output_power_dbm: 5.0
+    distribution:
+      path_losses_db: {lo1: 3.0, lo2: 4.0}
+      pad_options_db: [0, 3, 6]
+    modes:
+      - name: "fracN"
+        pfd_hz_range: [100e6, 100e6]
+        harmonics: 
+          - {k: 2, rel_dBc: -25}
+          - {k: 3, rel_dBc: -35}
+        pfd_spurs_at_output:
+           families:
+             - components: 
+               - {k: 1, base_rel_dBc: -65}
+        frac_boundary_spurs:
+           enabled: true
+           amplitude_at_eps0p5_rel_dBc: -58
+           rolloff_slope_db_per_dec: 10
+
+if2_model:
+  type: "symmetric_powerlaw"  # Change to "scaled_s2p_prototype" to test S2P
+  passband_il_db: 1.5
+  stop_floor_db: -70.0
+  rolloff_db_per_dec: 40.0
+  min_bw_hz: 500.0e+6
+  max_bw_hz: 2000.0e+6
+  center_range_hz: [3000.0e+6, 8000.0e+6]
+  search:
+    coarse_center_step_hz: 200.0e+6
+    coarse_bw_step_hz: 200.0e+6
+    top_k_seeds_for_refinement: 2
+    max_refine_iters: 5
+  scaled_s2p:
+    enabled: false
+    prototype_s2p_file: "if2_prototype.s2p"
