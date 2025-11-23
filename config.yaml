@@ -1,14 +1,15 @@
 project:
-  name: "KaBUC-SpurPlan"
+  name: "KaBUC_LTC5553_ADMV1550"
   seed: 42
   reference_10mhz_hz: 10000000
 
 bands:
-  if1_hz: {min: 950.0e+6, max: 2150.0e+6}
-  rf_hz:  {min: 27.5e+9, max: 31.0e+9}
+  if1_hz: {min: 950.0e+6, max: 2150.0e+6}   # 950 MHz – 2.15 GHz
+  rf_hz:  {min: 27.5e+9, max: 31.0e+9}      # 27.5 GHz – 31.0 GHz
   required_bandwidths_hz: [400.0e+6]
 
 grids:
+  # Tile discretization; you can tighten these if you want more tiles
   if1_center_step_hz: 50.0e+6
   rf_center_step_hz: 100.0e+6
   bw_grid_hz: [400.0e+6]
@@ -20,96 +21,320 @@ masks:
     default_dbc: -60.0
     table: []
   outofband:
-    default_dbc: -50.0
+    default_dbc: -60.0
     table: []
 
 rbw_binning:
-  lut_step_hz: 2.0e+6
+  lut_step_hz: 5.0e+5
+  rbw_hz: 5.0e+5
 
 hardware_choices:
   stacks:
-    - name: "Stack_Alpha"
-      mixer1: "MXR1_Gen"
-      mixer2: "MXR2_Gen"
-      lo1: "LMX2595_Sim"
-      lo2: "LMX2595_Sim"
-      rf_bpf_file: "rf_bpf_sim.csv"
+    - name: "KaBUC_LTC5553_ADMV1550"
+      mixer1: "LTC5553_MXR1"
+      mixer2: "ADMV1550_MXR2"
+      lo1: "LMX2594_LO1"
+      lo2: "ADF4371_LO2"
+      rf_bpf_file: "RF_S21_28to31GHz.csv" 
 
 orders:
-  m1n1_max_abs: 5
-  m2n2_max_abs: 5
-  cross_stage_sum_max: 8
+  m1n1_max_abs: 4
+  m2n2_max_abs: 4
+  cross_stage_sum_max: 16
 
 constraints:
-  guard_margin_db: 3.0
+  guard_margin_db: 0.0
   enforce_non_inverting_chain: true
+  enforce_desired_mn11_only: true  # Phase-1 assumption
+  desired_stage1_mn: [1, 1]
+  desired_stage2_mn: [1, 1]
 
-target_specs:
-  min_margin_db: 0.0
+targets:
+  min_margin_db: -30.0
 
 runtime_settings:
-  optimization_cutoff_db: -20.0   # Early exit if margin is worse than this
-  noise_floor_cutoff_dbc: -100.0  # Don't track spurs below this relative level
-  s2p_normalization_method: "3db_width" # How to define '1.0' BW in S2P files
+  optimization_cutoff_db: -30.0
+  noise_floor_cutoff_dbc: -100.0
+  s2p_normalization_method: "3db_width"
+  hysteresis_hz: 50.0e6
 
-mixers:
-  - name: "MXR1_Gen"
-    lo_range_hz: [100e6, 15e9]
-    required_lo_drive_dbm: {min: 0, max: 20}
-    isolation: {lo_to_rf_db: -30, if_to_rf_db: -50}
-    spur_list:
-      - [1, 2, -55]
-      - [2, 1, -50]
-      - [2, 2, -65]
-      - [3, 1, -60]
-      - [1, 3, -60]
-  
-  - name: "MXR2_Gen"
-    lo_range_hz: [100e6, 20e9]
-    required_lo_drive_dbm: {min: 0, max: 20}
-    isolation: {lo_to_rf_db: -30, if_to_rf_db: -50}
-    spur_list:
-      - [1, 2, -50]
-      - [2, 1, -45]
-      - [2, 2, -60]
-      - [3, 1, -55]
-
-los:
-  - name: "LMX2595_Sim"
-    freq_range_hz: [100e6, 20e9]
-    step_hz: 1000
-    output_power_dbm: 5.0
-    distribution:
-      path_losses_db: {lo1: 3.0, lo2: 4.0}
-      pad_options_db: [0, 3, 6]
-    modes:
-      - name: "fracN"
-        pfd_hz_range: [100e6, 100e6]
-        harmonics: 
-          - {k: 2, rel_dBc: -25}
-          - {k: 3, rel_dBc: -35}
-        pfd_spurs_at_output:
-           families:
-             - components: 
-               - {k: 1, base_rel_dBc: -65}
-        frac_boundary_spurs:
-           enabled: true
-           amplitude_at_eps0p5_rel_dBc: -58
-           rolloff_slope_db_per_dec: 10
+  # Physics/Policy Knobs
+  runtime_lock_time_weight: 0.0
+  max_spur_level_dbc: 0.0       # 0 = no clamp
+  rf_passband_max_atten_db: 5.0
+  dominant_prune_cutoff_db: -20.0
+  dominant_spur_margin_buffer_db: 2.0
 
 if2_model:
-  type: "symmetric_powerlaw"  # Change to "scaled_s2p_prototype" to test S2P
-  passband_il_db: 1.5
-  stop_floor_db: -70.0
-  rolloff_db_per_dec: 40.0
-  min_bw_hz: 500.0e+6
-  max_bw_hz: 2000.0e+6
-  center_range_hz: [3000.0e+6, 8000.0e+6]
-  search:
-    coarse_center_step_hz: 200.0e+6
-    coarse_bw_step_hz: 200.0e+6
-    top_k_seeds_for_refinement: 2
-    max_refine_iters: 5
+  name: "IF2_Model_01"
+  type: "symmetric_powerlaw"
+  passband_il_db: 1.0
+  stop_floor_db: 80.0
+  rolloff_db_per_dec: 100.0
+  min_bw_hz: 400.0e6
+  max_bw_hz: 1000.0e6
+  # IF2 roughly in a comfortable region for LTC5553 (RF port) and ADMV1550 IF
+  center_range_hz: [3.0e9, 20.0e9]
+
   scaled_s2p:
     enabled: false
-    prototype_s2p_file: "if2_prototype.s2p"
+    prototype_s2p_file: "if2_prototype_normalized.s2p"
+
+  search:
+    coarse_center_step_hz: 50.0e6
+    coarse_bw_step_hz: 50.0e6
+    top_k_seeds_for_refinement: 10
+
+early_reject:
+  image_in_if2_passband: false
+  loft_in_if2_or_rf_passbands: false
+  rf_first_order_image_in_passband: false
+
+runtime_policy:
+  hysteresis_hz: 50.0e6
+  prefer_fewer_retunes: true
+  markov_transition_matrix_csv: null
+
+# -------------------------------------------------------------------
+# Mixer Models
+# -------------------------------------------------------------------
+
+mixers:
+  # Mixer 1: LTC5553 (3 GHz–20 GHz RF/LO, 500 MHz–9 GHz IF)
+  - name: "LTC5553_MXR1"
+    lo_range_hz: [3.0e9, 32.0e9]
+    required_lo_drive_dbm: {min: -6.0, max: +6.0}   # nominal ~0 dBm
+    isolation:
+      lo_to_rf_db: -25.0 # Not dangerous
+      if_to_rf_db: -40.0 # Not dangerous
+    include_isolation_spurs: true
+
+    # LO drive derating & family scaling
+    drive_derate:
+      nominal_dbm: 0.0
+      slope_db_per_db: 1.0
+      max_derate_db: 6.0
+
+    lo_family_scaling:
+      default_slope_db_per_db: 1.0
+      cap_db: 12.0
+
+    # Generic spur table (you can refine these from bench data later)
+    spur_list:
+      - [0, 1, -51]
+      - [0, 2, -58]
+      - [0, 3, -75]
+      - [0, 4, -75]
+
+      - [1, 0, -24]
+      - [1, 1, -0.0] # desired fundamental
+      - [1, 2, -64]
+      - [1, 3, -72]
+      - [1, 4, -75]
+
+      - [2, 0, -15]
+      - [2, 1, -42] # <--- CRITICAL VALUE!
+      - [2, 2, -58]
+      - [2, 3, -72]
+      - [2, 4, -73]
+
+      - [3, 0, -16]
+      - [3, 1, -13]
+      - [3, 2, -61]
+      - [3, 3, -71]
+      - [3, 4, -73]
+
+      - [4, 0, -20]
+      - [4, 1, -53]
+      - [4, 2, -62]
+      - [4, 3, -75]
+      - [4, 4, -75]
+
+  # Mixer 2: ADMV1550 (15–65 GHz RF/LO, DC–20 GHz IF)
+  - name: "ADMV1550_MXR2"
+    lo_range_hz: [15.0e9, 65.0e9]
+    required_lo_drive_dbm: {min: +12.0, max: +18.0}  # nominal ~+15 dBm
+    isolation:
+      lo_to_rf_db: -35.0 # Not dangerous
+      if_to_rf_db: -45.0 # Not dangerous
+    include_isolation_spurs: true
+
+    drive_derate:
+      nominal_dbm: 15.0
+      slope_db_per_db: 1.0
+      max_derate_db: 6.0
+
+    lo_family_scaling:
+      default_slope_db_per_db: 1.0
+      cap_db: 12.0
+
+    spur_list:
+    # Format: [m (LO), n (IF), relative_dBc]
+    # Tables OFTEN use the opposite LO/IF m-n convention!!! Be careful.
+      - [0, 1, -55]
+      - [0, 2, -89]
+      - [0, 3, -89] 
+      - [0, 4, -87]
+
+      - [1, 0, -5]
+      - [1, 1, -0.0] # desired fundamental
+      - [1, 2, -46]
+      - [1, 3, -73]
+      - [1, 4, -74]
+
+      - [2, 0, -3]
+      - [2, 1, -41]
+      - [2, 2, -61]
+      - [2, 3, -63]
+      - [2, 4, -60]
+
+      - [3, 0, -3]
+      - [3, 1, -11]
+      - [3, 2, -50]
+      - [3, 3, -65]
+      - [3, 4, -65]
+
+      - [4, 0, -3]
+      - [4, 1, -11]
+      - [4, 2, -51]
+      - [4, 3, -65]
+      - [4, 4, -65]
+
+# -------------------------------------------------------------------
+# LO Synthesizers
+# -------------------------------------------------------------------
+
+los:
+  # LO1: LMX2594 (used to drive LTC5553)
+  - name: "LMX2594_LO1"
+    freq_range_hz: [10.0e6, 15.0e9]
+    step_hz: 1.0e3
+
+    # Approximate output power vs. frequency (from datasheet typicals)
+    output_power_model:
+      table:
+        freq_hz: [5.0e9, 10.0e9, 15.0e9]
+        p_out_dbm: [4.0, 4.0, 4.0]
+      divider_adjust_db:
+        "/1": 0
+        "/2": -1
+        "/4": -2
+        "/8": -3
+
+    distribution:
+      # LO distribution losses for this PLL
+      path_losses_db: {lo1: 3.0, lo2: 0.0}
+      pad_options_db: [0]
+
+    divider_spectrum:
+      "/1": { harm_delta_dBc: 0 }
+      "/2": { harm_delta_dBc: 6 }
+      "/4": { harm_delta_dBc: 12 }
+      "/8": { harm_delta_dBc: 18 }
+
+    modes:
+      - name: "fracN"
+        enabled: true
+        pfd_hz_range: [10.0e6, 200.0e6]
+        pfd_dividers: [1, 2, 4, 8]
+        vco_dividers: [1, 2, 4, 8, 16]
+
+        lock_time_model:
+          base_ms: 0.40
+          per_mhz_ms: 0.002
+          mode_penalties_ms:
+            int_to_frac: 0.30
+            frac_to_int: 0.20
+
+        harmonics:
+          - {k: 2, rel_dBc: -120.0} # Causes spur issues
+          - {k: 3, rel_dBc: -130.0} # Causes spur issues
+
+        # PFD spurs ~−90 dBc typical.
+        pfd_spurs_at_output:
+          families:
+            - name: "k*fPFD"
+              components:
+                - {k: 1, base_rel_dBc: -90.0, rolloff_dB_per_dec: 6.0}
+                - {k: 2, base_rel_dBc: -90.0, rolloff_dB_per_dec: 6.0}
+
+        frac_boundary_spurs:
+          enabled: true
+          amplitude_at_eps0p5_rel_dBc: -155.0
+          rolloff_slope_db_per_dec: 10.0
+
+  # LO2: ADF4371 (Ka-band LO for ADMV1550)
+  - name: "ADF4371_LO2"
+    # ADF4371 RF output range is 62.5 MHz to 32 GHz (via /8, /16, /32 paths)
+    freq_range_hz: [62.5e6, 32.0e9]
+    step_hz: 1.0e3   # 1 kHz fractional-N resolution (model assumption)
+
+    # Use typical maximum output power vs frequency from datasheet Table 1
+    # RF8x / RF16x / RF32x outputs at maximum power setting.
+    output_power_model:
+      table:
+        freq_hz:   [4.0e9,  8.0e9, 16.0e9, 32.0e9]
+        p_out_dbm: [18.0,    18.0,   18.0,    18.0]
+      # No divider-based power correction in this phase; keep neutral.
+      divider_adjust_db:
+        "/1":  0
+        "/2":  0
+        "/4":  0
+        "/8":  0
+        "/16": 0
+        "/32": 0
+
+    # Distribution from ADF4371 to ADMV1550 LO port.
+    # Keep the same assumptions as your previous LO2 entry unless you’ve
+    # measured the actual path loss.
+    distribution:
+      path_losses_db: {lo1: 0.0, lo2: 4.0}
+      pad_options_db: [0, 3, 6]
+
+    # Very simple divider spectrum model; you can refine later with
+    # your measured harmonic vs divider data if needed.
+    divider_spectrum:
+      "/1":  { harm_delta_dBc: 0 }
+      "/2":  { harm_delta_dBc: 0 }
+      "/4":  { harm_delta_dBc: 0 }
+      "/8":  { harm_delta_dBc: 0 }
+      "/16": { harm_delta_dBc: 0 }
+      "/32": { harm_delta_dBc: 0 }
+
+    modes:
+      - name: "fracN"
+        enabled: true
+
+        # PFD operation up to 250 MHz (datasheet).
+        pfd_hz_range: [10.0e6, 250.0e6]
+        pfd_dividers: [1, 2, 4, 8]
+        # Allow the engine to conceptually use various RF8x/RF16x/RF32x modes
+        # by representing them as VCO dividers.
+        vco_dividers: [1, 2, 4, 8, 16, 32]
+
+        # Lock-time model: ~3 ms for a reasonably large jump.
+        lock_time_model:
+          base_ms: 3.0     # auto-cal on
+          per_mhz_ms: 0.002
+          mode_penalties_ms:
+            int_to_frac: 0.0
+            frac_to_int: 0.0
+
+        # Harmonics: use typical worst-case ~−30 dBc as a global model.
+        harmonics:
+          - {k: 2, rel_dBc: -130.0} # Causes spur issues
+          - {k: 3, rel_dBc: -130.0} # Causes spur issues
+
+        # PFD spurs ~−90 dBc typical.
+        pfd_spurs_at_output:
+          families:
+            - name: "k*fPFD"
+              components:
+                - {k: 1, base_rel_dBc: -90.0, rolloff_dB_per_dec: 6.0}
+                - {k: 2, base_rel_dBc: -90.0, rolloff_dB_per_dec: 6.0}
+
+        # Integer-boundary spur: unfiltered inband ~−55 dBc.
+        frac_boundary_spurs:
+          enabled: true
+          amplitude_at_eps0p5_rel_dBc: -155.0
+          rolloff_slope_db_per_dec: 10.0
