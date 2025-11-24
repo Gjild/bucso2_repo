@@ -16,6 +16,7 @@ from buc import (
     SpurEngine,
     generate_spur_ledger,
     plot_margin_heatmap,
+    plot_if2_filter,
     basic_validation,
     markov_lock_summary,
 )
@@ -406,6 +407,13 @@ def main():
 
     heatmap_path = out_dir / "heatmap_margin.png"
     plot_margin_heatmap(df_policy, filename=str(heatmap_path))
+    
+    # --- Export and plot final IF2 filter attenuation ---
+    if2_csv_path = out_dir / "if2_filter_response.csv"
+    if2_png_path = out_dir / "if2_filter_response.png"
+    plot_if2_filter(engine, final_if2,
+                    csv_path=str(if2_csv_path),
+                    png_path=str(if2_png_path))
 
     if cfg.markov_matrix.size > 0:
         markov_path = out_dir / "markov_lock_summary.json"
@@ -418,7 +426,7 @@ def main():
         worst_row = valid_rows.loc[valid_rows['spur_margin_db'].idxmin()]
         print(f"\nRunning Diagnostics for Worst Case: Tile {worst_row['tile_id']} (Margin {worst_row['spur_margin_db']:.2f} dB)")
 
-        ledger = generate_spur_ledger(engine, int(worst_row['tile_id']), worst_row, final_if2)
+        ledger = generate_spur_ledger(engine, int(worst_row['tile_id']), worst_row, final_if2, report_threshold_db=1e9)
         if not ledger.empty:
             print(ledger.head(10).to_string(index=False))
             ledger_path = out_dir / "worst_case_ledger.csv"

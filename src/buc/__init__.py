@@ -13,7 +13,7 @@ from .buc_structures import (
 from .buc_models import HardwareStack
 from .buc_engine import SpurEngine
 from .buc_diagnostics import generate_spur_ledger
-from .buc_visuals import plot_margin_heatmap
+from .buc_visuals import plot_margin_heatmap, plot_if2_filter
 from .buc_markov import markov_lock_summary
 from .buc_validation import basic_validation
 
@@ -37,6 +37,7 @@ __all__ = [
     "SpurEngine",
     "generate_spur_ledger",
     "plot_margin_heatmap",
+    "plot_if2_filter",
     "markov_lock_summary",
     "basic_validation",
     "build_dense_lut",
