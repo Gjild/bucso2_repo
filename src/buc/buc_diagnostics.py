@@ -42,6 +42,11 @@ def generate_spur_ledger(
     side_str = policy_row.get('lo1_side', 'low')
     is_sum_mix = (side_str == 'low')
 
+    # IF1 harmonic model, kept consistent with the engine.
+    if1_harmonics = getattr(engine.cfg, "if1_harmonics", None)
+    if not if1_harmonics:
+        if1_harmonics = [(1, 0.0)]
+
     # High-level chain sense + desired path formulas
     chain_sense = "Sum-Sum" if is_sum_mix else "Diff-Diff"
     if is_sum_mix:
@@ -119,77 +124,90 @@ def generate_spur_ledger(
     f_if2_desired = if2_filter.center_hz
     tol_if2 = max(100.0, engine.grid_step)  # same spirit as engine: small but >0
 
-    stage1_spurs = []  # (f_if2, level_at_if2, formula, m1, n1)
+    # (f_if2, level_at_if2, formula, m1, n1, source_tag)
+    stage1_spurs = []
 
     # ------------------------------------------------------------------
     # A. Stage-1 spurs at IF2 (used as input to Stage-2 leakage paths)
     # ------------------------------------------------------------------
+    # 1) LO-only families (n == 0) – independent of IF1 and its harmonics.
     for k in range(len(lo1_spec)):
         f_lo_c, p_lo_c = lo1_spec[k]
-        is_main = (k == 0)
         lo_tag = "LO1" if k == 0 else "LO1H"
 
         for row in engine.hw.mixer1.spur_table_np:
             m, n, base_rej = int(row[0]), int(row[1]), row[2]
             rej = base_rej - corr1
-            lvl = p_lo_c + rej  # same as engine: LO component + scaled rej
+            lvl = p_lo_c + rej
 
-            # n == 0 : pure LO term → one spur, no sum/diff over IF
-            if n == 0:
-                f_spur_if2 = abs(m * f_lo_c)
-                atten_if2 = get_lut_val(f_spur_if2, engine.if2_lut_buffer, engine.grid_step)
-                lvl_input = lvl - atten_if2
-                if lvl_input < noise_floor:
-                    continue
+            if n != 0:
+                continue  # not LO-only
 
-                formula = f"({m}*{lo_tag})"
-                stage1_spurs.append((f_spur_if2, lvl_input, formula, m, n))
+            # Pure LO tone at m * f_LO1
+            f_spur_if2 = abs(m * f_lo_c)
+            atten_if2 = get_lut_val(
+                f_spur_if2, engine.if2_lut_buffer, engine.grid_step
+            )
+            lvl_input = lvl - atten_if2
+            if lvl_input < noise_floor:
                 continue
 
-            # n > 0 : ±n recipes relative to IF1, LO sign removed
-            eff_lo = m * f_lo_c  # +m * LO1
+            formula = f"({m}*{lo_tag})"
+            stage1_spurs.append(
+                (f_spur_if2, lvl_input, formula, m, n, "LO-only")
+            )
 
-            # --- PURE-IF BUGFIX HERE ------------------------------------
-            # For m == 0, f_spur = |0 ± n*f_IF1| = |n|*f_IF1, so +n and -n
-            # land on the same frequency. Only generate ONE sign to avoid
-            # 2× power double-counting.
-            pure_if_family = (m == 0 and n != 0)
-            s_if_values = (1,) if pure_if_family else (-1, 1)
-            # -------------------------------------------------------------
+    # 2) IF-dependent families (n > 0) for each IF1 harmonic.
+    for k_if, rel_if_dbc in if1_harmonics:
+        if1_freq = k_if * tile.if1_center_hz
 
-            for s_if in s_if_values:
-                # Identify desired path *by IF2 frequency* (like the engine):
-                # Any main-LO (m,n)=(1,1) tone that lands at f_if2_desired
-                # is considered the desired IF2 and should not be added
-                # to the spur list.
-                is_desired = False
-                if is_main and m == 1 and n == 1:
-                    f_candidate = abs(eff_lo + s_if * n * tile.if1_center_hz)
-                    if abs(f_candidate - f_if2_desired) < tol_if2:
-                        is_desired = True
+        for k in range(len(lo1_spec)):
+            f_lo_c, p_lo_c = lo1_spec[k]
+            is_main = (k == 0)
+            lo_tag = "LO1" if k == 0 else "LO1H"
 
-                if is_desired:
-                    continue
+            for row in engine.hw.mixer1.spur_table_np:
+                m, n, base_rej = int(row[0]), int(row[1]), row[2]
+                if n == 0:
+                    continue  # LO-only; already handled
 
-                f_spur_if2 = abs(eff_lo + s_if * n * tile.if1_center_hz)
-                atten_if2 = get_lut_val(f_spur_if2, engine.if2_lut_buffer, engine.grid_step)
-                lvl_input = lvl - atten_if2
-                if lvl_input < noise_floor:
-                    continue
+                rej = base_rej - corr1
+                lvl = p_lo_c + rej  # base mixer spur level
 
-                sign_if = "+" if s_if > 0 else "-"
-                formula = f"({m}*{lo_tag} {sign_if} {n}*IF1)"
+                eff_lo = m * f_lo_c
 
-                # Keep stage-1 orders (m1, n1) for later leakage context
-                stage1_spurs.append((f_spur_if2, lvl_input, formula, m, n))
+                # PURE IF BUGFIX: avoid double-counting for m == 0, n != 0.
+                pure_if_family = (m == 0 and n != 0)
+                s_if_values = (1,) if pure_if_family else (-1, 1)
 
-    # IF feedthrough into Stage-1 list (for S2 processing)
-    #if engine.hw.mixer2.include_isolation_spurs:
-    #    rej_if = engine.hw.mixer2.if_feedthrough_rej_db()
-    #    # Treat as a special "0,1" term (pure IF leaking through)
-    #    stage1_spurs.append(
-    #        (if2_filter.center_hz, rej_if, "(IF Feedthrough)", 0, 1)
-    #    )
+                for s_if in s_if_values:
+                    # Desired-path detection only for the fundamental harmonic.
+                    is_desired = False
+                    if (k_if == 1) and is_main and m == 1 and n == 1:
+                        f_candidate = abs(eff_lo + s_if * n * if1_freq)
+                        if abs(f_candidate - f_if2_desired) < tol_if2:
+                            is_desired = True
+
+                    if is_desired:
+                        continue
+
+                    f_spur_if2 = abs(eff_lo + s_if * n * if1_freq)
+                    atten_if2 = get_lut_val(
+                        f_spur_if2, engine.if2_lut_buffer, engine.grid_step
+                    )
+
+                    # Apply harmonic amplitude offset rel_if_dbc (typically ≤ 0 dB)
+                    lvl_input = (lvl + rel_if_dbc) - atten_if2
+                    if lvl_input < noise_floor:
+                        continue
+
+                    sign_if = "+" if s_if > 0 else "-"
+                    formula = f"({m}*{lo_tag} {sign_if} {n}*IF1_k={k_if})"
+
+                    source_tag = f"IF1 k={k_if}"
+                    stage1_spurs.append(
+                        (f_spur_if2, lvl_input, formula, m, n, source_tag)
+                    )
 
     # ------------------------------------------------------------------
     # B. Direct Stage-2 spurs from desired IF2 tone
@@ -272,7 +290,7 @@ def generate_spur_ledger(
     # ------------------------------------------------------------------
     # C. Stage-1 leakage spurs mixed again in Stage-2
     # ------------------------------------------------------------------
-    for sp_f, sp_l, sp_form, m1, n1 in stage1_spurs:
+    for sp_f, sp_l, sp_form, m1, n1, src_tag in stage1_spurs:
         # Apply clamp
         l_eff = sp_l
         if l_eff > max_spur_dbc:
@@ -302,7 +320,7 @@ def generate_spur_ledger(
                     if (limit - final_lvl) < report_threshold_db:
                         formula = f"{m}*{lo_tag}"
                         add_entry(
-                            "Leakage (S1->S2)",
+                            f"Leakage (S1->S2, {src_tag})",
                             "1+2",
                             formula,
                             f_final_rf,
@@ -336,7 +354,7 @@ def generate_spur_ledger(
                         sign_if = "+" if s_if > 0 else "-"
                         formula = f"{m}*{lo_tag} {sign_if} {n}*[{clean_sp_form}]"
                         add_entry(
-                            "Leakage (S1->S2)",
+                            f"Leakage (S1->S2, {src_tag})",
                             "1+2",
                             formula,
                             f_final_rf,

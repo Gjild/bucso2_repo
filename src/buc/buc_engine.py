@@ -55,7 +55,6 @@ class SpurEngine:
         idx_min, idx_max = int(rf_min / self.grid_step), int(rf_max / self.grid_step)
         if idx_min < len(self.mask_lut) and idx_max < len(self.mask_lut):
             self.mask_lut[idx_min:idx_max] = float(ib_cfg['default_dbc'])
-
             
         def _apply_mask_table(table, default_step, lut):
             for entry in table:
@@ -137,7 +136,6 @@ class SpurEngine:
         limit = self.mask_lut[idx]
         margin = limit - final_lvl - self.guard_db
         return float(margin)
-
 
     def _estimate_rf_passband(self, lut, step_hz):
         """Config-driven estimation with LUT validation."""
@@ -239,36 +237,143 @@ class SpurEngine:
         cache[key] = cand
         return cand
 
-    def _get_stage1_spurs_raw(self, tile, lo1_freq, is_sum_mix, recipes1, search_mode, dominant_only: bool):
-        # Cache key explicitly includes IF1 center and dominant_only flag.
-        # This ensures that if the same Tile ID is reused with different IF1
-        # frequencies or with dominant-only vs full recipes, we do not return
-        # stale spurs.
+    def _get_stage1_spurs_raw(
+        self,
+        tile,
+        lo1_freq: float,
+        is_sum_mix: bool,
+        recipes1: np.ndarray,
+        search_mode: int,
+        dominant_only: bool,
+    ) -> np.ndarray:
+        """
+        Compute Stage-1 spurs at the Mixer-1 output, including IF1 harmonics.
+
+        Returns a numpy array with columns:
+          [0] f_if2_Hz
+          [1] level_dBc (pre-IF2, relative to desired)
+          [2] m_abs
+          [3] n_abs
+
+        Semantics:
+
+          - LO-only families (n_abs == 0) are generated ONCE from a base run
+            and are NOT scaled by the IF1 harmonic amplitudes.
+
+          - IF-dependent families (n_abs > 0) are generated once per configured
+            IF1 harmonic and are shifted by that harmonic’s rel_dBc.
+
+          - The IF1 harmonic content comes from cfg.if1_harmonics, a list of
+            (k, rel_dBc) pairs.
+
+        Notes:
+
+          * is_sum_mix is currently not used here; the mixing sense is encoded
+            in the sign of 'signed_n' within the recipes.
+        """
+
+        # Normalise harmonic model; also used in the cache key.
+        if1_harmonics = getattr(self.cfg, "if1_harmonics", None)
+        if not if1_harmonics:
+            if1_harmonics = [(1, 0.0)]
+
+        # Cache key includes the harmonic model so that changing the model and
+        # reusing the same GlobalConfig object cannot return stale results.
+        harmonics_key = tuple(if1_harmonics)
         key = (
-            tile.id, 
-            lo1_freq, 
-            tile.if1_center_hz, 
-            int(search_mode), 
+            tile.id,
+            lo1_freq,
+            tile.if1_center_hz,
+            int(search_mode),
             1 if is_sum_mix else 0,
             int(dominant_only),
+            harmonics_key,
         )
+
         if key in self.stage1_raw_cache:
             return self.stage1_raw_cache[key]
+
+        chunks: list[np.ndarray] = []
+
+        # --------------------------------------------------------------
+        # 1) Base run for LO-only spur families (n_abs == 0).
+        #    These terms are independent of IF1 amplitude and frequency.
+        #    Any non-zero IF1 frequency would do; we use IF1_center for clarity.
+        # --------------------------------------------------------------
+        base_if1 = tile.if1_center_hz
 
         while True:
             count = compute_stage1_spurs_no_if2(
                 recipes1,
-                tile.if1_center_hz,
+                base_if1,
                 self.stage1_raw_buffer,
             )
             if count < 0:
+                # Grow buffer and retry
                 new_size = self.stage1_raw_buffer_size * 2
                 self.stage1_raw_buffer = np.zeros((new_size, 4), dtype=np.float64)
                 self.stage1_raw_buffer_size = new_size
                 continue
             break
 
-        arr = self.stage1_raw_buffer[:count].copy()
+        if count > 0:
+            buf = self.stage1_raw_buffer[:count]
+            # n_abs is stored in column 3
+            mask_lo_only = buf[:, 3] == 0.0
+            if np.any(mask_lo_only):
+                lo_chunk = buf[mask_lo_only].copy()
+                # LO-only entries are NOT scaled by rel_dBc.
+                chunks.append(lo_chunk)
+
+        # --------------------------------------------------------------
+        # 2) IF-dependent terms (n_abs > 0) for each IF1 harmonic.
+        #    For each (k_if, rel_if_dBc), run the kernel with
+        #        if1_freq = k_if * IF1_center
+        #    and level-shift those spurs by rel_if_dBc.
+        # --------------------------------------------------------------
+        for k_if, rel_if_dbc in if1_harmonics:
+            if1_freq = float(k_if) * float(tile.if1_center_hz)
+
+            while True:
+                count = compute_stage1_spurs_no_if2(
+                    recipes1,
+                    if1_freq,
+                    self.stage1_raw_buffer,
+                )
+                if count < 0:
+                    new_size = self.stage1_raw_buffer_size * 2
+                    self.stage1_raw_buffer = np.zeros((new_size, 4), dtype=np.float64)
+                    self.stage1_raw_buffer_size = new_size
+                    continue
+                break
+
+            if count <= 0:
+                continue
+
+            buf = self.stage1_raw_buffer[:count]
+            mask_if_dep = buf[:, 3] > 0.0
+            if not np.any(mask_if_dep):
+                continue
+
+            chunk = buf[mask_if_dep].copy()
+
+            # Scale by the harmonic amplitude relative to the fundamental.
+            # rel_if_dbc is typically <= 0.0; adding it lowers the spur level.
+            if rel_if_dbc != 0.0:
+                chunk[:, 1] += rel_if_dbc
+
+            chunks.append(chunk)
+
+        # --------------------------------------------------------------
+        # 3) Stack, cache, and return
+        # --------------------------------------------------------------
+        if not chunks:
+            arr = self.stage1_raw_buffer[:0].copy()
+        elif len(chunks) == 1:
+            arr = chunks[0]
+        else:
+            arr = np.vstack(chunks)
+
         self.stage1_raw_cache[key] = arr
         return arr
 
@@ -535,7 +640,7 @@ class SpurEngine:
             self.max_order_stage2, dominant_only
         )
         
-        # IF2-Agnostic Stage 1 Spurs
+        # IF2-Agnostic Stage 1 Spurs (now includes IF1 harmonics)
         raw_stage1 = self._get_stage1_spurs_raw(
             tile, lo1_freq, is_sum_mix, recipes1, search_mode, dominant_only
         )
@@ -565,17 +670,6 @@ class SpurEngine:
              self.stage1_buffer[count, 3] = n1_abs
              count += 1
              
-        # IF Feedthrough Injection
-        #if self.hw.mixer2.include_isolation_spurs:
-        #     if2_rej = self.hw.mixer2.if_feedthrough_rej_db()
-        #     if2_lvl = 0.0 + if2_rej # desired IF2 reference
-        #     if count < self.stage1_buffer_size:
-        #         self.stage1_buffer[count, 0] = if2_filter.center_hz
-        #         self.stage1_buffer[count, 1] = if2_lvl
-        #         self.stage1_buffer[count, 2] = 0.0 # m1
-        #         self.stage1_buffer[count, 3] = 1.0 # n1
-        #         count += 1
-
         # EXPLICIT DESIRED (1,1) SUPPRESSION
         if self.cfg.enforce_desired_mn11_only:
             if high_side:

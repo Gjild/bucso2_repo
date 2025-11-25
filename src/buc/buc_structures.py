@@ -151,6 +151,11 @@ class GlobalConfig:
     
     if2_proto_norm_x: np.ndarray = field(default_factory=lambda: np.array([]))
     if2_proto_val_y: np.ndarray = field(default_factory=lambda: np.array([]))
+
+    # New: IF1 harmonic model as list of (k, rel_dBc) pairs.
+    # k : positive integer harmonic index (1 = fundamental).
+    # rel_dBc : amplitude of that harmonic relative to the fundamental (0 dBc).
+    if1_harmonics: List[Tuple[int, float]] = field(default_factory=list)
     
     # Runtime / Pruning
     runtime_lock_time_weight: float = 0.0
@@ -209,6 +214,44 @@ class GlobalConfig:
 
         targ = data.get('targets', {})
         cfg.min_margin_db = float(targ.get('min_margin_db', 0.0))
+
+        # ------------------------------------------------------------------
+        # IF1 harmonic spectrum config
+        # ------------------------------------------------------------------
+        if1_model = data.get("if1_model", {}) or {}
+        harmonics_cfg = if1_model.get("harmonics", []) or []
+
+        harmonics: List[Tuple[int, float]] = []
+        for idx, h in enumerate(harmonics_cfg):
+            try:
+                k = int(h.get("k", 1))
+                rel = float(h.get("rel_dBc", 0.0))
+            except Exception as ex:
+                print(
+                    f"Warning: skipping malformed if1_model.harmonics[{idx}]: {h!r} "
+                    f"(error: {ex})"
+                )
+                continue
+
+            if k < 1:
+                print(
+                    f"Warning: skipping IF1 harmonic with non-positive k={k!r} "
+                    f"in if1_model.harmonics[{idx}]"
+                )
+                continue
+
+            harmonics.append((k, rel))
+
+        if not harmonics:
+            # Backwards-compatible default: ideal single-tone IF1.
+            harmonics = [(1, 0.0)]
+            print(
+                "Info: no valid IF1 harmonics configured; "
+                "defaulting to [(1, 0.0)] (ideal single-tone IF1)."
+            )
+
+        cfg.if1_harmonics = harmonics
+        # ------------------------------------------------------------------
 
         # Constraints & Desired Path
         con = data.get('constraints', {})
