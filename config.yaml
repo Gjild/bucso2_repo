@@ -5,7 +5,10 @@ project:
 
 bands:
   if1_hz: {min: 950.0e+6, max: 2450.0e+6}   # 950 MHz – 2.45 GHz
-  rf_hz:  {min: 28.25e+9, max: 30.25e+9}      # 27.5 GHz – 31.0 GHz
+  #rf_hz:  {min: 28.25e+9, max: 30.25e+9}      # 27.5 GHz – 31.0 GHz
+  #rf_hz:  {min: 28.25e+9, max: 29.0e+9}      # Tile 1
+  #rf_hz:  {min: 29.25e+9, max: 30.0e+9}      # Tile 2
+  rf_hz:  {min: 30.25e+9, max: 31.0e+9}      # Tile 3
   required_bandwidths_hz: [1500.0e+6]
 
 if1_model:
@@ -13,14 +16,14 @@ if1_model:
     - k: 1
       rel_dBc: 0.0      # fundamental IF1
     - k: 2
-      rel_dBc: -30.0    # 2nd harmonic at -30 dBc
+      rel_dBc: -80.0    # 2nd harmonic at -30 dBc
     - k: 3
-      rel_dBc: -40.0    # 3rd harmonic at -40 dBc
+      rel_dBc: -80.0    # 3rd harmonic at -40 dBc
 
 grids:
   # Tile discretization; you can tighten these if you want more tiles
   if1_center_step_hz: 50.0e+6
-  rf_center_step_hz: 1000.0e+6
+  rf_center_step_hz: 1500.0e+6
   bw_grid_hz: [1500.0e+6]
   snap_if1_rf_to_grid: true
   grid_max_freq_hz: 50.0e+9
@@ -59,7 +62,7 @@ constraints:
   desired_stage2_mn: [1, 1]
 
 targets:
-  min_margin_db: -30.0
+  min_margin_db: -60.0
 
 runtime_settings:
   optimization_cutoff_db: -30.0
@@ -74,6 +77,11 @@ runtime_settings:
   dominant_prune_cutoff_db: -20.0
   dominant_spur_margin_buffer_db: 2.0
 
+  # sweep IF1 within each tile
+  # 0.0 -> old behaviour (only IF1_center)
+  # e.g. 10e6 -> evaluate every 10 MHz between IF1 start/stop of the tile
+  tile_if1_sweep_step_hz: 100e6
+
 if2_model:
   name: "IF2_Model_01"
   type: "symmetric_powerlaw"
@@ -83,16 +91,16 @@ if2_model:
   min_bw_hz: 1500.0e6
   max_bw_hz: 2000.0e6
   # IF2 roughly in a comfortable region for LTC5553 (RF port) and ADMV1550 IF
-  center_range_hz: [4.0e9, 20.0e9]
+  center_range_hz: [4.65e9, 7.0e9]
 
   scaled_s2p:
     enabled: false
     prototype_s2p_file: "if2_prototype_normalized.s2p"
 
   search:
-    coarse_center_step_hz: 50.0e6
-    coarse_bw_step_hz: 50.0e6
-    top_k_seeds_for_refinement: 10
+    coarse_center_step_hz: 10.0e6
+    coarse_bw_step_hz: 10.0e6
+    top_k_seeds_for_refinement: 50
 
 early_reject:
   image_in_if2_passband: false

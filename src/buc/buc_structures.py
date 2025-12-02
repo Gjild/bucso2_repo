@@ -163,6 +163,9 @@ class GlobalConfig:
     prefer_fewer_retunes: bool = True
     dominant_prune_cutoff_db: float = -20.0
     dominant_spur_margin_buffer_db: float = 2.0
+
+    # intra-tile IF1 sweep step (0 => old behaviour: no sweep)
+    tile_if1_sweep_step_hz: float = 0.0
     
     markov_matrix: np.ndarray = field(default_factory=lambda: np.array([]))
     markov_stationary: Optional[np.ndarray] = None
@@ -211,6 +214,9 @@ class GlobalConfig:
         cfg.retune_penalty_weight = float(run_set.get('retune_penalty_weight', 0.0))
         cfg.dominant_prune_cutoff_db = float(run_set.get('dominant_prune_cutoff_db', -20.0))
         cfg.dominant_spur_margin_buffer_db = float(run_set.get('dominant_spur_margin_buffer_db', 2.0))
+
+        # per-tile IF1 sweep step; 0.0 => disabled (current behaviour)
+        cfg.tile_if1_sweep_step_hz = float(run_set.get('tile_if1_sweep_step_hz', 0.0))
 
         targ = data.get('targets', {})
         cfg.min_margin_db = float(targ.get('min_margin_db', 0.0))

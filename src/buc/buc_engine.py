@@ -28,6 +28,11 @@ class SpurEngine:
         self.hysteresis_hz = float(self.cfg.hysteresis_hz)
         self.cross_stage_sum_max = int(self.cfg.cross_stage_sum_max)
 
+        # intra-tile IF1 sweep step (Hz)
+        self.tile_if1_sweep_step_hz = float(
+            getattr(self.cfg, "tile_if1_sweep_step_hz", 0.0)
+        )
+
         self.enforce_non_inverting = bool(
             self.cfg.yaml_data.get('constraints', {}).get('enforce_non_inverting_chain', True)
         )
@@ -245,6 +250,7 @@ class SpurEngine:
         recipes1: np.ndarray,
         search_mode: int,
         dominant_only: bool,
+        if1_base_freq: float | None = None,  # NEW
     ) -> np.ndarray:
         """
         Compute Stage-1 spurs at the Mixer-1 output, including IF1 harmonics.
@@ -255,21 +261,8 @@ class SpurEngine:
           [2] m_abs
           [3] n_abs
 
-        Semantics:
-
-          - LO-only families (n_abs == 0) are generated ONCE from a base run
-            and are NOT scaled by the IF1 harmonic amplitudes.
-
-          - IF-dependent families (n_abs > 0) are generated once per configured
-            IF1 harmonic and are shifted by that harmonic’s rel_dBc.
-
-          - The IF1 harmonic content comes from cfg.if1_harmonics, a list of
-            (k, rel_dBc) pairs.
-
-        Notes:
-
-          * is_sum_mix is currently not used here; the mixing sense is encoded
-            in the sign of 'signed_n' within the recipes.
+        'if1_base_freq' is the fundamental IF1 tone for this evaluation.
+        If None, defaults to tile.if1_center_hz (backwards compatible).
         """
 
         # Normalise harmonic model; also used in the cache key.
@@ -277,13 +270,15 @@ class SpurEngine:
         if not if1_harmonics:
             if1_harmonics = [(1, 0.0)]
 
-        # Cache key includes the harmonic model so that changing the model and
-        # reusing the same GlobalConfig object cannot return stale results.
+        if if1_base_freq is None:
+            if1_base_freq = tile.if1_center_hz
+
+        # Cache key now includes the IF1 tone used
         harmonics_key = tuple(if1_harmonics)
         key = (
             tile.id,
             lo1_freq,
-            tile.if1_center_hz,
+            float(if1_base_freq),
             int(search_mode),
             1 if is_sum_mix else 0,
             int(dominant_only),
@@ -296,11 +291,10 @@ class SpurEngine:
         chunks: list[np.ndarray] = []
 
         # --------------------------------------------------------------
-        # 1) Base run for LO-only spur families (n_abs == 0).
-        #    These terms are independent of IF1 amplitude and frequency.
-        #    Any non-zero IF1 frequency would do; we use IF1_center for clarity.
+        # 1) LO-only spur families (n_abs == 0)
+        #    Independent of IF1 amplitude and frequency.
         # --------------------------------------------------------------
-        base_if1 = tile.if1_center_hz
+        base_if1 = float(if1_base_freq)
 
         while True:
             count = compute_stage1_spurs_no_if2(
@@ -309,7 +303,6 @@ class SpurEngine:
                 self.stage1_raw_buffer,
             )
             if count < 0:
-                # Grow buffer and retry
                 new_size = self.stage1_raw_buffer_size * 2
                 self.stage1_raw_buffer = np.zeros((new_size, 4), dtype=np.float64)
                 self.stage1_raw_buffer_size = new_size
@@ -318,21 +311,18 @@ class SpurEngine:
 
         if count > 0:
             buf = self.stage1_raw_buffer[:count]
-            # n_abs is stored in column 3
             mask_lo_only = buf[:, 3] == 0.0
             if np.any(mask_lo_only):
                 lo_chunk = buf[mask_lo_only].copy()
-                # LO-only entries are NOT scaled by rel_dBc.
                 chunks.append(lo_chunk)
 
         # --------------------------------------------------------------
         # 2) IF-dependent terms (n_abs > 0) for each IF1 harmonic.
         #    For each (k_if, rel_if_dBc), run the kernel with
-        #        if1_freq = k_if * IF1_center
-        #    and level-shift those spurs by rel_if_dBc.
+        #        if1_freq = k_if * if1_base_freq
         # --------------------------------------------------------------
         for k_if, rel_if_dbc in if1_harmonics:
-            if1_freq = float(k_if) * float(tile.if1_center_hz)
+            if1_freq = float(k_if) * float(if1_base_freq)
 
             while True:
                 count = compute_stage1_spurs_no_if2(
@@ -357,8 +347,6 @@ class SpurEngine:
 
             chunk = buf[mask_if_dep].copy()
 
-            # Scale by the harmonic amplitude relative to the fundamental.
-            # rel_if_dbc is typically <= 0.0; adding it lowers the spur level.
             if rel_if_dbc != 0.0:
                 chunk[:, 1] += rel_if_dbc
 
@@ -376,6 +364,7 @@ class SpurEngine:
 
         self.stage1_raw_cache[key] = arr
         return arr
+
 
     # --- Unified Policy Builder ---
     def build_policy_for_if2(
@@ -590,20 +579,148 @@ class SpurEngine:
         return score, expected_lock
 
     def calculate_brittleness(self, tile: Tile, if2_filter: FilterModel, high_side: bool):
-        base = self._eval_chain_fast(tile, if2_filter, high_side, search_mode=False)
-        if base <= -900: return 99.9
-        step = self.BRITTLENESS_STEP_HZ 
-        t_if1 = Tile(tile.id, tile.if1_center_hz + step, tile.bw_hz, tile.rf_center_hz)
-        m_if1 = self._eval_chain_fast(t_if1, if2_filter, high_side, search_mode=False)
-        t_rf = Tile(tile.id, tile.if1_center_hz, tile.bw_hz, tile.rf_center_hz + step)
-        m_rf = self._eval_chain_fast(t_rf, if2_filter, high_side, search_mode=False)
+        # Temporarily disable intra-tile sweep for brittleness
+        orig_step = self.tile_if1_sweep_step_hz
+        self.tile_if1_sweep_step_hz = 0.0
+        try:
+            base = self._eval_chain_fast(tile, if2_filter, high_side, search_mode=False)
+            if base <= -900:
+                return 99.9
+            step = self.BRITTLENESS_STEP_HZ
+            t_if1 = Tile(tile.id, tile.if1_center_hz + step, tile.bw_hz, tile.rf_center_hz)
+            m_if1 = self._eval_chain_fast(t_if1, if2_filter, high_side, search_mode=False)
+            t_rf = Tile(tile.id, tile.if1_center_hz, tile.bw_hz, tile.rf_center_hz + step)
+            m_rf = self._eval_chain_fast(t_rf, if2_filter, high_side, search_mode=False)
+        finally:
+            self.tile_if1_sweep_step_hz = orig_step
+
         return max(max(0, base - m_if1), max(0, base - m_rf))
+
     
     def _eval_chain_approx(self, tile, if2_filter, high_side: bool):
         """Approximate margin using dominant-only spur set."""
         return self._eval_chain_fast(
             tile, if2_filter, high_side, search_mode=True, dominant_only=True
         )
+    
+    def _eval_chain_single_if1(
+        self,
+        tile: Tile,
+        if2_filter: FilterModel,
+        high_side: bool,
+        search_mode: bool,
+        dominant_only: bool,
+        lo1_freq: float,
+        lo2_freq: float,
+        recipes1: np.ndarray,
+        recipes2: np.ndarray,
+        if1_freq: float,
+    ) -> float:
+        """
+        Evaluate spur margin for ONE IF1 tone for a given tile/LO pair.
+
+        This is basically the old _eval_chain_fast inner body, but with
+        'if1_freq' explicit instead of always tile.if1_center_hz.
+        """
+        is_sum_mix = not high_side
+
+        # IF2-agnostic Stage-1 spurs for this IF1 tone
+        raw_stage1 = self._get_stage1_spurs_raw(
+            tile,
+            lo1_freq,
+            is_sum_mix,
+            recipes1,
+            search_mode,
+            dominant_only,
+            if1_base_freq=if1_freq,   # NEW: explicit IF1
+        )
+
+        # Resize Stage-1 buffer if needed
+        if raw_stage1.shape[0] > self.stage1_buffer_size:
+            new_size = max(self.stage1_buffer_size * 2, raw_stage1.shape[0])
+            self.stage1_buffer = np.zeros((new_size, 4), dtype=np.float64)
+            self.stage1_buffer_size = new_size
+
+        # Apply IF2 filter + noise floor
+        count = 0
+        for i in range(raw_stage1.shape[0]):
+            f_if2 = raw_stage1[i, 0]
+            lvl_pre = raw_stage1[i, 1]
+            m1_abs = raw_stage1[i, 2]
+            n1_abs = raw_stage1[i, 3]
+
+            atten_if2 = get_lut_val(f_if2, self.if2_lut_buffer, self.grid_step)
+            lvl_post = lvl_pre - atten_if2
+
+            if lvl_post < self.noise_floor:
+                continue
+
+            self.stage1_buffer[count, 0] = f_if2
+            self.stage1_buffer[count, 1] = lvl_post
+            self.stage1_buffer[count, 2] = m1_abs
+            self.stage1_buffer[count, 3] = n1_abs
+            count += 1
+
+        # Desired-path IF2 frequency for THIS IF1 tone
+        if self.cfg.enforce_desired_mn11_only:
+            if high_side:
+                # Diff-Diff desired: |LO1 - IF1|
+                f_if2_desired = abs(lo1_freq - if1_freq)
+            else:
+                # Sum-Sum desired: LO1 + IF1
+                f_if2_desired = lo1_freq + if1_freq
+        else:
+            # Fallback: keep old behaviour
+            f_if2_desired = if2_filter.center_hz
+
+        # Suppress the (1,1) desired tone at that IF2
+        if self.cfg.enforce_desired_mn11_only:
+            tol_if2 = max(100.0, self.grid_step * 1.0)
+
+            filtered_count = 0
+            for i in range(count):
+                f_if2 = self.stage1_buffer[i, 0]
+                m1_abs = self.stage1_buffer[i, 2]
+                n1_abs = self.stage1_buffer[i, 3]
+
+                if (
+                    m1_abs == 1.0
+                    and n1_abs == 1.0
+                    and abs(f_if2 - f_if2_desired) < tol_if2
+                ):
+                    continue
+
+                self.stage1_buffer[filtered_count, :] = self.stage1_buffer[i, :]
+                filtered_count += 1
+            count = filtered_count
+
+        valid_stage1 = self.stage1_buffer[:count]
+
+        # Desired RF frequency for THIS IF1 tone (based on chain sense)
+        if high_side:
+            # Diff-Diff: |LO2 - IF2|
+            rf_freq_desired = abs(lo2_freq - f_if2_desired)
+        else:
+            # Sum-Sum: LO2 + IF2
+            rf_freq_desired = lo2_freq + f_if2_desired
+
+        margin = compute_stage2_from_intermediates(
+            valid_stage1,
+            recipes2,
+            rf_freq_desired,
+            f_if2_desired,
+            self.rf_lut,
+            self.mask_lut,
+            self.grid_step,
+            self.guard_db,
+            self.noise_floor,
+            self.rbw_hz,
+            self.cross_stage_sum_max,
+            self.cfg.max_spur_level_dbc,
+        )
+
+        return margin
+
 
     def _eval_chain_fast(self, tile, if2_filter, high_side, search_mode=True, dominant_only=False):
         is_sum_mix = not high_side
@@ -619,96 +736,86 @@ class SpurEngine:
         lo2_freq = self._quantize_lo_freq(self.hw.lo2_def, lo2_target)
         
         r1 = self.hw.lo1_def.freq_range
-        if not (r1[0] <= lo1_freq <= r1[1]): return -999.0
+        if not (r1[0] <= lo1_freq <= r1[1]):
+            return -999.0
         r2 = self.hw.lo2_def.freq_range
-        if not (r2[0] <= lo2_freq <= r2[1]): return -999.0
+        if not (r2[0] <= lo2_freq <= r2[1]):
+            return -999.0
             
         valid1, _, p1 = self.hw.get_valid_lo_config(self.hw.lo1_def, lo1_freq, self.hw.mixer1.drive_req)
-        if not valid1: return -999.0
+        if not valid1:
+            return -999.0
         valid2, _, p2 = self.hw.get_valid_lo_config(self.hw.lo2_def, lo2_freq, self.hw.mixer2.drive_req)
-        if not valid2: return -999.0
+        if not valid2:
+            return -999.0
 
         if self._early_reject_chain(tile, if2_filter, lo1_freq, lo2_freq, high_side):
             return -999.0
         
         _, recipes1 = self._get_lo_data(
-            self.hw.lo1_def, lo1_freq, self.hw.mixer1, p1, search_mode, 
+            self.hw.lo1_def, lo1_freq, self.hw.mixer1, p1, search_mode,
             self.max_order_stage1, dominant_only
         )
         _, recipes2 = self._get_lo_data(
-            self.hw.lo2_def, lo2_freq, self.hw.mixer2, p2, search_mode, 
+            self.hw.lo2_def, lo2_freq, self.hw.mixer2, p2, search_mode,
             self.max_order_stage2, dominant_only
         )
-        
-        # IF2-Agnostic Stage 1 Spurs (now includes IF1 harmonics)
-        raw_stage1 = self._get_stage1_spurs_raw(
-            tile, lo1_freq, is_sum_mix, recipes1, search_mode, dominant_only
-        )
-        
-        if raw_stage1.shape[0] > self.stage1_buffer_size:
-             new_size = max(self.stage1_buffer_size * 2, raw_stage1.shape[0])
-             self.stage1_buffer = np.zeros((new_size, 4), dtype=np.float64)
-             self.stage1_buffer_size = new_size
-             
-        # Apply IF2 Filter & Noise Floor
-        # AND explicit desired path suppression based on geometry
-        count = 0
-        for i in range(raw_stage1.shape[0]):
-             f_if2 = raw_stage1[i, 0]
-             lvl_pre = raw_stage1[i, 1]
-             m1_abs = raw_stage1[i, 2]
-             n1_abs = raw_stage1[i, 3]
-             
-             atten_if2 = get_lut_val(f_if2, self.if2_lut_buffer, self.grid_step)
-             lvl_post = lvl_pre - atten_if2
-             
-             if lvl_post < self.noise_floor: continue
-             
-             self.stage1_buffer[count, 0] = f_if2
-             self.stage1_buffer[count, 1] = lvl_post
-             self.stage1_buffer[count, 2] = m1_abs
-             self.stage1_buffer[count, 3] = n1_abs
-             count += 1
-             
-        # EXPLICIT DESIRED (1,1) SUPPRESSION
-        if self.cfg.enforce_desired_mn11_only:
-            if high_side:
-                # Diff-Diff desired: |LO1 - IF1|
-                f_if2_desired = abs(lo1_freq - tile.if1_center_hz)
-            else:
-                # Sum-Sum desired: LO1 + IF1
-                f_if2_desired = lo1_freq + tile.if1_center_hz
 
-            # Tolerance check
-            tol_if2 = max(100.0, self.grid_step * 1.0)
-            
-            filtered_count = 0
-            for i in range(count):
-                f_if2 = self.stage1_buffer[i, 0]
-                m1_abs = self.stage1_buffer[i, 2]
-                n1_abs = self.stage1_buffer[i, 3]
-                
-                # Drop only the (1,1) tone at the desired IF2 frequency
-                if (m1_abs == 1.0 and n1_abs == 1.0 and abs(f_if2 - f_if2_desired) < tol_if2):
-                    continue
-                    
-                self.stage1_buffer[filtered_count, :] = self.stage1_buffer[i, :]
-                filtered_count += 1
-            count = filtered_count
+        # --- NEW: per-tile IF1 sweep logic ------------------------------
+        step = float(self.tile_if1_sweep_step_hz)
+        if step <= 0.0:
+            # Old behaviour: single IF1 tone at tile centre
+            margin = self._eval_chain_single_if1(
+                tile,
+                if2_filter,
+                high_side,
+                search_mode,
+                dominant_only,
+                lo1_freq,
+                lo2_freq,
+                recipes1,
+                recipes2,
+                tile.if1_center_hz,
+            )
+        else:
+            # Sweep IF1 from start to stop of tile bandwidth
+            if_bw_half = 0.5 * tile.bw_hz
+            f_start = tile.if1_center_hz - if_bw_half
+            f_stop = tile.if1_center_hz + if_bw_half
 
-        valid_stage1 = self.stage1_buffer[:count]
-        
-        margin = compute_stage2_from_intermediates(
-            valid_stage1,
-            recipes2,
-            tile.rf_center_hz,
-            if2_filter.center_hz,
-            self.rf_lut, self.mask_lut,
-            self.grid_step, self.guard_db, self.noise_floor,
-            self.rbw_hz,
-            self.cross_stage_sum_max,
-            self.cfg.max_spur_level_dbc
-        )
+            if step < 0.0:
+                step = -step
+            if step == 0.0:
+                step = tile.bw_hz  # shouldn't happen, but be defensive
+
+            worst_margin = 999.0
+            f_if1 = f_start
+            # Include stop frequency (with a small epsilon for FP rounding)
+            while f_if1 <= f_stop + 1e-9:
+                m_once = self._eval_chain_single_if1(
+                    tile,
+                    if2_filter,
+                    high_side,
+                    search_mode,
+                    dominant_only,
+                    lo1_freq,
+                    lo2_freq,
+                    recipes1,
+                    recipes2,
+                    f_if1,
+                )
+                if m_once < worst_margin:
+                    worst_margin = m_once
+
+                # Optional: early abort in search mode if we are clearly terrible
+                if search_mode and worst_margin < (self.opt_cutoff - 20.0):
+                    # This tile/side is clearly bad; no need to sweep further
+                    break
+
+                f_if1 += step
+
+            margin = worst_margin
+        # ----------------------------------------------------------------
 
         # If the main path already failed hard, just return it
         if margin <= -900.0:
