@@ -4,9 +4,12 @@ project:
   reference_10mhz_hz: 50000000
 
 bands:
-  if1_hz: {min: 950.0e+6, max: 2450.0e+6}   # 950 MHz – 2.45 GHz (full modem band)
-  rf_hz:  {min: 28.25e+9, max: 30.25e+9}   # RF centers 28.25 / 29.25 / 30.25 GHz
-  required_bandwidths_hz: [1500.0e+6]       # One 1.5 GHz-wide tile per RF center
+  if1_hz: {min: 950.0e+6, max: 2450.0e+6}   # 950 MHz – 2.45 GHz
+  #rf_hz:  {min: 28.25e+9, max: 30.25e+9}      # 27.5 GHz – 31.0 GHz
+  #rf_hz:  {min: 28.25e+9, max: 29.0e+9}      # Tile 1
+  #rf_hz:  {min: 29.25e+9, max: 30.0e+9}      # Tile 2
+  rf_hz:  {min: 30.25e+9, max: 31.0e+9}      # Tile 3
+  required_bandwidths_hz: [1500.0e+6]
 
 if1_model:
   harmonics:
@@ -18,10 +21,10 @@ if1_model:
       rel_dBc: -80.0    # 3rd harmonic at -40 dBc
 
 grids:
-  # Tile discretization
-  if1_center_step_hz: 50.0e+6        # still fine; only 1700 MHz will satisfy full 950–2450 MHz span
-  rf_center_step_hz: 1.0e+9          # 1 GHz step → RF centers: 28.25, 29.25, 30.25 GHz
-  bw_grid_hz: [1500.0e+6]            # tile bandwidth = 1.5 GHz (full IF1 band)
+  # Tile discretization; you can tighten these if you want more tiles
+  if1_center_step_hz: 50.0e+6
+  rf_center_step_hz: 1500.0e+6
+  bw_grid_hz: [1500.0e+6]
   snap_if1_rf_to_grid: true
   grid_max_freq_hz: 50.0e+9
 
@@ -77,7 +80,7 @@ runtime_settings:
   # sweep IF1 within each tile
   # 0.0 -> old behaviour (only IF1_center)
   # e.g. 10e6 -> evaluate every 10 MHz between IF1 start/stop of the tile
-  tile_if1_sweep_step_hz: 20e6
+  tile_if1_sweep_step_hz: 10e6
 
 if2_model:
   name: "IF2_Model_01"
@@ -271,7 +274,8 @@ mixers:
 los:
   # LO1: LMX2594 (used to drive LTC5553)
   - name: "LMX2594_LO1"
-    freq_range_hz: [10.0e6, 15.0e9]
+    #freq_range_hz: [10.0e6, 15.0e9]
+    freq_range_hz: [5.90e9, 5.91e9]
     step_hz: 1.0e3
 
     # Approximate output power vs. frequency (from datasheet typicals)

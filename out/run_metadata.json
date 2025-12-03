@@ -1,0 +1,36 @@
+{
+  "project": {
+    "name": "KaBUC_LTC5553_ADMV1550",
+    "seed": 42,
+    "reference_10mhz_hz": 50000000
+  },
+  "seed": 42,
+  "grid": {
+    "grid_step_hz": 500000.0,
+    "rbw_hz": 500000.0,
+    "grid_max_freq_hz": 50000000000.0
+  },
+  "orders": {
+    "m1_max_order": 4,
+    "m2_max_order": 4,
+    "cross_stage_sum_max": 16
+  },
+  "hardware": {
+    "stack_name": "KaBUC_LTC5553_ADMV1550",
+    "rf_bpf_file": "RF_S21_28to31GHz.csv"
+  },
+  "runtime": {
+    "max_spur_level_dbc": 0.0,
+    "dominant_prune_cutoff_db": -20.0
+  },
+  "files": {
+    "config_yaml_sha256": "1900d13cc404fb15d5166467ef36a9b428ad439804b1cdecd60d77f687f5654b",
+    "final_policy_sha256": "7ab12dac12ab52f59a914e826242ad0cf473b2feab6b905c19948ec94a482dc7"
+  },
+  "if2_selected": {
+    "center_hz": 7530000000.0,
+    "bw_hz": 1500000000.0
+  },
+  "python": "3.13.7 (main, Aug 18 2025, 19:16:27) [MSC v.1944 64 bit (AMD64)]",
+  "platform": "Windows-11-10.0.26100-SP0"
+}
