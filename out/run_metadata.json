@@ -24,13 +24,13 @@
     "dominant_prune_cutoff_db": -20.0
   },
   "files": {
-    "config_yaml_sha256": "66b6208c70cdd8117a05e07ee4e22e8368f8377142ef2673a81e254ce4b3d7a2",
-    "final_policy_sha256": "7ab12dac12ab52f59a914e826242ad0cf473b2feab6b905c19948ec94a482dc7"
+    "config_yaml_sha256": "44345af92d748fa01a603fa74d6750a427d18583b2c56dc2ab87a56661bbae13",
+    "final_policy_sha256": "80bcd8bf2fab71b15a201b569508fb30feac14071cdef4f71791526f3cd73024"
   },
   "if2_selected": {
-    "center_hz": 7530000000.0,
-    "bw_hz": 1500000000.0
+    "center_hz": 7500000000.0,
+    "bw_hz": 1984140000.0
   },
-  "python": "3.13.1 (main, Dec 19 2024, 14:38:48) [MSC v.1942 64 bit (AMD64)]",
-  "platform": "Windows-11-10.0.26200-SP0"
+  "python": "3.13.7 (main, Aug 18 2025, 19:16:27) [MSC v.1944 64 bit (AMD64)]",
+  "platform": "Windows-11-10.0.26100-SP0"
 }

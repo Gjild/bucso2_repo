@@ -84,20 +84,20 @@ if2_model:
   type: "symmetric_powerlaw"
   passband_il_db: 1.0
   stop_floor_db: 80.0
-  rolloff_db_per_dec: 100.0
-  min_bw_hz: 1500.0e6
-  max_bw_hz: 2000.0e6
+  rolloff_db_per_dec: 120.0
+  min_bw_hz: 1984.14e6
+  max_bw_hz: 1984.15e6
   # IF2 roughly in a comfortable region for LTC5553 (RF port) and ADMV1550 IF
-  center_range_hz: [4.0e9, 12.0e9]
+  center_range_hz: [7.50e9, 7.5001e9]
 
   scaled_s2p:
-    enabled: false
-    prototype_s2p_file: "if2_prototype_normalized.s2p"
+    enabled: true
+    prototype_s2p_file: "IF2_PATRON.csv"
 
   search:
     coarse_center_step_hz: 10.0e6
     coarse_bw_step_hz: 10.0e6
-    top_k_seeds_for_refinement: 50
+    top_k_seeds_for_refinement: 10
 
 early_reject:
   image_in_if2_passband: false
@@ -135,8 +135,9 @@ mixers:
 
     # Generic spur table (you can refine these from bench data later)
     spur_list:
+    # Format: [m (LO), n (IF), relative_dBc]
       - [0, 1, -51]
-      - [0, 2, -58]
+      - [0, 2, -55]
       - [0, 3, -75]
       - [0, 4, -75]
 
@@ -311,8 +312,8 @@ los:
             frac_to_int: 0.20
 
         harmonics:
-          - {k: 2, rel_dBc: -20.0} # Causes spur issues
-          - {k: 3, rel_dBc: -30.0} # Causes spur issues
+          - {k: 2, rel_dBc: -29.0} # Causes spur issues
+          - {k: 3, rel_dBc: -14.0} # Causes spur issues
 
         # PFD spurs ~−90 dBc typical.
         pfd_spurs_at_output:

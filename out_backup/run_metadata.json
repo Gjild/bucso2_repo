@@ -24,11 +24,11 @@
     "dominant_prune_cutoff_db": -20.0
   },
   "files": {
-    "config_yaml_sha256": "1900d13cc404fb15d5166467ef36a9b428ad439804b1cdecd60d77f687f5654b",
-    "final_policy_sha256": "7ab12dac12ab52f59a914e826242ad0cf473b2feab6b905c19948ec94a482dc7"
+    "config_yaml_sha256": "95b7150bc5ceb2c5aa5fb801bd85756076042abf170452a4461e3c4ffee92db4",
+    "final_policy_sha256": "7aec29ab1fc824e61fddf0841540c1971ab42045e7b4c70b4ae8e19245dcc1de"
   },
   "if2_selected": {
-    "center_hz": 7530000000.0,
+    "center_hz": 7250000000.0,
     "bw_hz": 1500000000.0
   },
   "python": "3.13.7 (main, Aug 18 2025, 19:16:27) [MSC v.1944 64 bit (AMD64)]",

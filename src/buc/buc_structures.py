@@ -401,6 +401,9 @@ class GlobalConfig:
         
         bw_meas = f_upper - f_lower
         
+        # DEBUG: report what was auto-detected from your CSV/S2P
+        print("IF2 proto center:", f_center, "Hz, 3dB BW:", bw_meas, "Hz")
+        
         if bw_meas <= 0 or bw_meas < (freqs[-1] - freqs[0]) * 0.001:
             msg = ("Auto-detected BW from S2P seems invalid. "
                    "Check S2P quality or normalization method.")
@@ -413,6 +416,8 @@ class GlobalConfig:
         
         self.if2_proto_norm_x = (freqs - f_center) / bw_meas
         self.if2_proto_val_y = atten
+        
+        print("IF2 proto center:", f_center, "Hz, 3dB BW:", bw_meas, "Hz")
 
     def _parse_touchstone(self, file_path: str) -> Tuple[np.ndarray, np.ndarray]:
         freqs, s21_db = [], []
